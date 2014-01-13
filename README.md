@@ -37,7 +37,7 @@ Description 用于描述接口,结构如下:
 	{
 	     // 接口名称
 	     Name:"name",
-	     // 方法定义, 这里的input理论上只需要个数,但是为了后续便于验证,所以直接给出类型,output要求类型的理由机上
+	     // 方法定义, 这里的input理论上只需要个数,但是为了后续便于验证,所以直接给出类型,output要求类型的理由同上
 	     // 同时,由于在两端采用callback方式,所以是支持多参数的返回的,因此Output也是一个参数列表.
 	     Methods:{
 	         "MethodName1":{Input:[string,number,boolean],Output:[error,object]}
