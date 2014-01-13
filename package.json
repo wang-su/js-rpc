@@ -1,6 +1,6 @@
 {
   "name": "js-rpc",
-  "version": "0.1.01",
+  "version": "0.1.1",
   "description": "This is A Tools For Javascript RPC.",
   "main": "js-rpc.js",
   "homepage": "https://github.com/wang-su/js-rpc",
