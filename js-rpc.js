@@ -181,6 +181,7 @@ Agent.prototype = {
 };
 
 var arraySlice = Array.prototype.slice;
+
 /**
  * 
  * 创建一个代理方法,
@@ -207,7 +208,7 @@ var makeMethodAgent = function(name , methodName , _input , _output , _types , w
     return function(){
         
         var args = arraySlice.call(arguments,0), len = args.length;
-        var cb = args.pop() , err = null , type , arg;
+        var cb = len >= 1 ? args.pop() : false , err = null , type , arg;
         
         var message = {
                 Type : _output ? "Call" : "Notify",
@@ -237,7 +238,7 @@ var makeMethodAgent = function(name , methodName , _input , _output , _types , w
          */
         
         // 各种参数检查
-        if(!(cb instanceof Function)){
+        if(!(cb instanceof Function) && message.Type != 'Notify'){
             throw new Error("callback is not a function");
         }
         
@@ -316,7 +317,6 @@ var FrontAgent = function(description,writer){
  * 创建一个可以工作在一个通道上的RPC_Agent.
  */
 var RPC_Channel = function(){
-    
     this.SRC_RPC_MAP = {};      // 以当前端为源的RPC池,即"被调用者"
     this.DST_RPC_MAP = {};      // 以远端为源的RPC池,即"调用者
     this.waitingHelloAck = [];
@@ -387,15 +387,27 @@ RPC_Channel.prototype = {
         /**
          * 写出动作
          */
-        __write:function(connArgs){
-            
+        __write:function(haveConnArgs){
+            var me = this;
             if(this.writeBuffer.length == 0){
                 this.writeTimer = null;
                 return;
             }
-            
-            this.write(this.writeBuffer.splice(0,this.writeLimit),connArgs);
-            this.writeTimer = setTimeout(this.__write.bind(this,connArgs), this.writeInterval);
+            var msgs = this.writeBuffer.splice(0,this.writeLimit); 
+            /*
+             * 存在连接参数控制的情况下,表明消息并非发向同一个目的,
+             * 在这里做出区别,对于有连接参数的情况下,每次只处理一条,
+             * 无连接参数控制的情况下,一次写出最多this.writeLimit条
+             */
+            if(haveConnArgs){
+                debugger;
+                msgs.forEach(function(msg){
+                    me.write([msg[0]],msg[1]);
+                });
+            }else{
+                this.write(msgs);
+            }
+            this.writeTimer = setTimeout(me.__write.bind(me,haveConnArgs), me.writeInterval);
         },
         /**
          * 派发消息
@@ -408,6 +420,7 @@ RPC_Channel.prototype = {
                 
                 item = msg[i];
                 sn = item.SN, name = item.Name, methodName= item.MethodName, body = item.Body;
+                debugger;
                 if(sn && name && methodName && body){
                     switch(item.Type){
                         case "Call":
@@ -420,7 +433,7 @@ RPC_Channel.prototype = {
                                         Name : name,
                                         MethodName : methodName,
                                         Body : arraySlice.call(arguments,0)
-                                    },connArgs);
+                                    },false,connArgs);
                                 };
                             })(sn,name,methodName,me,connArgs));
                         case "Notify":
@@ -452,7 +465,7 @@ RPC_Channel.prototype = {
         send:function(msg,cb,connArgs){
             var me = this;
             var SN;
-            
+            var isConn = connArgs != undefined;
             if(msg.Type == "Callback"){
                 SN = msg.SN;
             }else{
@@ -467,7 +480,7 @@ RPC_Channel.prototype = {
                 }
             }
             
-            this.writeBuffer.push(msg);
+            this.writeBuffer.push(isConn ? [msg,connArgs] : msg);
             
             if(this.writeTimer == null)
                 this.writeTimer = setTimeout(me.__write.bind(me,connArgs), me.writeInterval);
@@ -480,14 +493,52 @@ RPC_Channel.prototype = {
         onData:function(msg,connArgs){
             debugger;
             // console.log("on message,",msg);
-            msg = typeof(msg) == "object"  ? msg : JSON.parse(msg);
+            
+            if(this.isDestory == true){
+                try{
+                    /**
+                     * 这个调用,基本应该发生在publish已销毁,但是链接对像未关闭的情况下.
+                     * 其它正常情况,不应该调用到这里.而应该在业务中考虑正常的消耗通知.
+                     */
+                    this.write("_END_",connArgs);
+                }catch(e){}
+                return;
+            }
+            
+            if( typeof(msg) != "object" ){
+                // publish的结束标记.如果当前的publish已经被销毁,那么subscript端如何调用,都是接收到这个字符串
+                if(msg == "_END_"){
+                    /*
+                     * 当收到_END_时,这条链接基本属于直接报废了..所以清理所有的等待回调的function.
+                     */
+                    for(var key in me.waitingCallback){
+                        try{
+                            /**
+                             * 这里直接用一个强硬的回传.不理回调格式.直接认为callback的第一个参数是error对像.并忽略错误.
+                             * 理由是,异步的JS的风格,第一个参数接收错误通知,已经是一种显而异见的约定.
+                             */
+                            me.waitingCallback[key](new Error(msg));
+                        }catch(e){}
+                        delete me.waitingCallback[key];
+                    }
+                    return;
+                }else{
+                    try{
+                        msg = JSON.parse(msg);
+                    }catch(e){
+                        msg = {};
+                        console.warn("can not parse the message," , e.stack);
+                        return;
+                    }
+                }
+            }
             /**
              * 这里接受两种类型. 所有消息通信内容为Array, 控制通信内容为Object
              */
             if(Array.isArray(msg)){
                 this.__receiveMsg(msg,connArgs);
             }else if(msg.echo){
-                this.write(this.toString());
+                this.write(this.valueOf(),connArgs);
             }else{
                 this.__restore_dst(msg);
             }
@@ -505,7 +556,7 @@ RPC_Channel.prototype = {
          */
         syncPublish:function(cb,connArgs){
             this.waitingHelloAck.push(cb);
-            this.write('{"echo":true}',connArgs);
+            this.write({echo:true},connArgs);
         }
 };
 
